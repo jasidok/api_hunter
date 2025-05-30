@@ -15,16 +15,14 @@ typer>=0.9.0
 
 # Data Processing & Validation
 pydantic>=2.5.0
+pydantic-settings>=2.0.0
 jsonschema>=4.20.0
 python-multipart>=0.0.6
 lxml>=4.9.3
 beautifulsoup4>=4.12.2
 
-# Database & Caching
-sqlalchemy>=2.0.23
-alembic>=1.13.0
+# Caching
 redis>=5.0.1
-psycopg2-binary>=2.9.8
 
 # Security & Crypto
 cryptography>=41.0.7
@@ -59,3 +57,8 @@ jinja2>=3.1.2
 weasyprint>=60.2
 pyyaml>=6.0.1
 uuid>=1.30
+
+# Phase 6 - Integration & Performance Dependencies
+psutil>=5.9.0              # System monitoring and performance metrics
+urllib3>=2.0.0             # Enhanced HTTP client functionality
+importlib-util>=0.1.0      # Dynamic plugin loading support

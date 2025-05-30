@@ -133,8 +133,7 @@ Options:
 Create `.env` file in your project directory:
 
 ```env
-# Database Configuration
-DATABASE_URL=postgresql://localhost:5432/api_hunter
+# Redis Configuration (for caching)
 REDIS_URL=redis://localhost:6379/0
 
 # Scanning Configuration
@@ -160,26 +159,53 @@ INCLUDE_EVIDENCE=true
 ### Programmatic API
 
 ```python
-from api_hunter import APIHunter
-from api_hunter.core.config import Config
+import asyncio
+from api_hunter.core.config import get_config
+from api_hunter.core.http_client import HTTPClient
 
-# Initialize scanner
-scanner = APIHunter(
-    target_url="https://api.example.com",
-    config=Config()
-)
+async def main():
+    # Initialize configuration and HTTP client
+    config = get_config()
+    http_client = HTTPClient(config)
+    
+    try:
+        # Example: Basic endpoint discovery
+        from api_hunter.discovery.rest_discoverer import RESTDiscoverer
+        discoverer = RESTDiscoverer(http_client)
+        endpoints = await discoverer.discover_endpoints("https://api.example.com")
+        
+        # Example: Run vulnerability detection
+        from api_hunter.vulnerabilities.bola_detector import BOLADetector
+        bola_detector = BOLADetector(http_client)
+        vulnerabilities = await bola_detector.detect_bola_vulnerabilities("https://api.example.com")
+        
+        # Example: Generate report
+        from api_hunter.reporting.report_generator import ReportGenerator, ReportType, ReportFormat
+        report_generator = ReportGenerator(config)
+        
+        scan_results = {
+            'target_url': 'https://api.example.com',
+            'findings': vulnerabilities,
+            'total_requests': 100,
+            'duration': 30.5
+        }
+        
+        report_file = await report_generator.generate_report(
+            vulnerabilities,
+            scan_results,
+            ReportType.TECHNICAL_DETAILED,
+            ReportFormat.HTML,
+            "security_report.html"
+        )
+        
+        print(f"Report generated: {report_file}")
+        
+    finally:
+        await http_client.close()
 
-# Run discovery scan
-results = await scanner.discover()
-
-# Run full security assessment
-vulnerabilities = await scanner.scan_vulnerabilities()
-
-# Generate professional report
-report = scanner.generate_report(
-    format="html",
-    include_evidence=True
-)
+# Run the async function
+if __name__ == "__main__":
+    asyncio.run(main())
 ```
 
 ### Custom Plugins

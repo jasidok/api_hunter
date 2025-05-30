@@ -781,7 +781,6 @@ def config():
     table.add_row("Version", config.version)
     table.add_row("Debug Mode", str(config.debug))
     table.add_row("Log Level", config.log_level)
-    table.add_row("Database URL", config.get_database_url())
     table.add_row("Redis URL", config.get_redis_url())
     table.add_row("Max Concurrent Requests", str(config.scanning.max_concurrent_requests))
     table.add_row("Request Timeout", f"{config.scanning.request_timeout}s")
@@ -844,6 +843,248 @@ Built with ❤️ for the security community[/dim]
 • Professional Reporting
 """
     console.print(Panel(info, title="Version Information", border_style="blue"))
+
+
+@cli.command()
+@click.argument('template')
+@click.option('--count', default=10, help='Number of payloads to generate')
+@click.option('--output', '-o', help='Output file for payloads')
+@click.option('--format', 'output_format',
+              type=click.Choice(['hex', 'raw', 'c-array']),
+              default='hex', help='Output format')
+@click.option('--protocol', help='Generate protocol-specific payloads (grpc, websocket, custom)')
+def generate_binary_payloads(template, count, output, output_format, protocol):
+    """Generate binary payloads using template syntax.
+    
+    Template syntax examples:
+    \b
+    - {R[0,255,"B"]} - Range 0-255 as single byte
+    - {[0,1,2,3]} - Array of specific values  
+    - {r[10,5]} - 5 random sequences of 10 bytes each
+    - {@file.txt} - Load payloads from file
+    
+    Example: generate-binary-payloads '{[0,1]}FF{R[1,10,"B"]}'
+    """
+    console.print(f"[bold blue]Generating binary payloads from template: {template}[/bold blue]")
+
+    from api_hunter.fuzzing.binary_payload_generator import BinaryPayloadGenerator, EnhancedPayloadGenerator
+
+    payloads = []
+
+    if protocol:
+        # Generate protocol-specific payloads
+        enhanced_gen = EnhancedPayloadGenerator()
+        payloads = enhanced_gen.generate_protocol_payloads(protocol)[:count]
+        console.print(f"[green]Generated {len(payloads)} {protocol} protocol payloads[/green]")
+    else:
+        # Generate from template
+        try:
+            generator = BinaryPayloadGenerator(template)
+            payloads = generator.generate_all(count)
+            console.print(f"[green]Generated {len(payloads)} payloads from template[/green]")
+        except Exception as e:
+            console.print(f"[red]Error generating payloads: {e}[/red]")
+            return
+
+    if not payloads:
+        console.print("[yellow]No payloads generated[/yellow]")
+        return
+
+    # Display payloads
+    console.print("\n[bold]Generated Payloads:[/bold]")
+    for i, payload in enumerate(payloads[:10], 1):  # Show first 10
+        if output_format == 'hex':
+            hex_str = payload.hex()
+            formatted = ' '.join(hex_str[i:i + 2] for i in range(0, len(hex_str), 2))
+            console.print(f"{i:2d}: {formatted}")
+        elif output_format == 'raw':
+            console.print(f"{i:2d}: {payload}")
+        elif output_format == 'c-array':
+            c_array = ', '.join(f'0x{b:02x}' for b in payload)
+            console.print(f"{i:2d}: {{ {c_array} }}")
+
+    if len(payloads) > 10:
+        console.print(f"... and {len(payloads) - 10} more payloads")
+
+    # Save to file if requested
+    if output:
+        try:
+            with open(output, 'w') as f:
+                for i, payload in enumerate(payloads):
+                    if output_format == 'hex':
+                        hex_str = payload.hex()
+                        formatted = ' '.join(hex_str[i:i + 2] for i in range(0, len(hex_str), 2))
+                        f.write(f"{formatted}\n")
+                    elif output_format == 'raw':
+                        f.write(f"{payload}\n")
+                    elif output_format == 'c-array':
+                        c_array = ', '.join(f'0x{b:02x}' for b in payload)
+                        f.write(f"{{ {c_array} }},\n")
+            console.print(f"[green]Payloads saved to {output}[/green]")
+        except Exception as e:
+            console.print(f"[red]Error saving to file: {e}[/red]")
+
+
+@cli.command()
+@click.option('--targets', required=True, help='Comma-separated list of target URLs')
+@click.option('--scan-types', default='discovery,vulnerabilities',
+              help='Comma-separated list of scan types')
+@click.option('--severity-threshold', default='MEDIUM',
+              type=click.Choice(['LOW', 'MEDIUM', 'HIGH', 'CRITICAL']),
+              help='Minimum severity threshold for failing pipeline')
+@click.option('--fail-on-vulns/--no-fail-on-vulns', default=True,
+              help='Whether to fail pipeline on vulnerabilities')
+@click.option('--report-formats', default='json,html',
+              help='Comma-separated list of report formats')
+@click.option('--output-dir', default='./security-reports',
+              help='Output directory for reports')
+@click.option('--max-duration', default=600, type=int,
+              help='Maximum scan duration in seconds')
+@click.option('--generate-config',
+              type=click.Choice(['github-actions', 'gitlab-ci', 'jenkins']),
+              help='Generate CI/CD configuration file')
+@click.option('--config-output-dir', default='.',
+              help='Output directory for generated CI/CD config')
+async def cicd_scan(targets, scan_types, severity_threshold, fail_on_vulns,
+                    report_formats, output_dir, max_duration, generate_config,
+                    config_output_dir):
+    """Execute security scan optimized for CI/CD environments."""
+
+    # Import CI/CD manager
+    from api_hunter.integrations.cicd_manager import CICDManager, ScanConfiguration, CICDPlatform
+
+    cicd_manager = CICDManager()
+    await cicd_manager.initialize()
+
+    # Parse targets and other comma-separated values
+    target_list = [t.strip() for t in targets.split(',')]
+    scan_type_list = [s.strip() for s in scan_types.split(',')]
+    report_format_list = [r.strip() for r in report_formats.split(',')]
+
+    # If generating config, do that and exit
+    if generate_config:
+        platform_map = {
+            'github-actions': CICDPlatform.GITHUB_ACTIONS,
+            'gitlab-ci': CICDPlatform.GITLAB_CI,
+            'jenkins': CICDPlatform.JENKINS
+        }
+
+        platform = platform_map[generate_config]
+        scan_config = ScanConfiguration(
+            target_urls=target_list,
+            scan_types=scan_type_list,
+            severity_threshold=severity_threshold,
+            fail_on_vulnerabilities=fail_on_vulns,
+            report_formats=report_format_list,
+            max_scan_duration=max_duration
+        )
+
+        config_content = cicd_manager.generate_pipeline_config(
+            platform, scan_config, config_output_dir
+        )
+
+        console.print(f"[green]Generated {generate_config} configuration[/green]")
+        console.print(f"[blue]Configuration saved to {config_output_dir}[/blue]")
+        return
+
+    # Detect CI/CD environment
+    detected_platform = cicd_manager.detect_cicd_environment()
+    if detected_platform:
+        console.print(f"[cyan]Detected CI/CD platform: {detected_platform.value}[/cyan]")
+
+    # Get environment configuration
+    env_config = cicd_manager.get_environment_config()
+
+    # Override with environment variables if present
+    if env_config.get('targets'):
+        target_list = env_config['targets']
+    if env_config.get('scan_types'):
+        scan_type_list = env_config['scan_types']
+    if env_config.get('severity_threshold'):
+        severity_threshold = env_config['severity_threshold']
+    if 'fail_on_vulnerabilities' in env_config:
+        fail_on_vulns = env_config['fail_on_vulnerabilities']
+    if env_config.get('report_formats'):
+        report_format_list = env_config['report_formats']
+    if env_config.get('output_dir'):
+        output_dir = env_config['output_dir']
+    if env_config.get('max_duration'):
+        max_duration = env_config['max_duration']
+
+    console.print(f"[bold blue]Starting CI/CD security scan[/bold blue]")
+    console.print(f"[blue]Targets:[/blue] {', '.join(target_list)}")
+    console.print(f"[blue]Scan Types:[/blue] {', '.join(scan_type_list)}")
+    console.print(f"[blue]Severity Threshold:[/blue] {severity_threshold}")
+    console.print(f"[blue]Fail on Vulnerabilities:[/blue] {fail_on_vulns}")
+    console.print(f"[blue]Report Formats:[/blue] {', '.join(report_format_list)}")
+    console.print(f"[blue]Output Directory:[/blue] {output_dir}")
+
+    try:
+        # Execute the CI/CD scan
+        result = await cicd_manager.execute_cicd_scan(
+            targets=target_list,
+            scan_types=scan_type_list,
+            severity_threshold=severity_threshold,
+            fail_on_vulnerabilities=fail_on_vulns,
+            report_formats=report_format_list,
+            output_dir=output_dir,
+            max_duration=max_duration
+        )
+
+        # Display results
+        console.print("\n" + "=" * 60)
+        console.print(
+            f"[bold {'green' if result.success else 'red'}]CI/CD Scan {'Completed' if result.success else 'Failed'}[/bold {'green' if result.success else 'red'}]")
+        console.print(f"[blue]Scan ID:[/blue] {result.scan_id}")
+        console.print(f"[blue]Duration:[/blue] {result.scan_duration:.2f} seconds")
+        console.print(f"[blue]Vulnerabilities Found:[/blue] {result.vulnerabilities_found}")
+
+        if result.vulnerabilities_found > 0:
+            console.print(f"[red]High Severity:[/red] {result.high_severity_count}")
+            console.print(f"[yellow]Medium Severity:[/yellow] {result.medium_severity_count}")
+            console.print(f"[green]Low Severity:[/green] {result.low_severity_count}")
+
+        if result.report_paths:
+            console.print(f"[blue]Reports Generated:[/blue]")
+            for report_path in result.report_paths:
+                console.print(f"  • {report_path}")
+
+        if result.error_message:
+            console.print(f"[red]Error:[/red] {result.error_message}")
+
+        console.print("=" * 60)
+
+        # Send notifications if plugins available
+        try:
+            from api_hunter.plugins.plugin_manager import PluginManager
+            from api_hunter.plugins.base_plugin import PluginType
+
+            plugin_manager = PluginManager()
+            await plugin_manager.initialize()
+
+            # Send notifications
+            if result.success:
+                await plugin_manager.send_notifications(
+                    f"CI/CD scan completed successfully. Found {result.vulnerabilities_found} vulnerabilities.",
+                    "info" if result.vulnerabilities_found == 0 else "warning"
+                )
+            else:
+                await plugin_manager.send_notifications(
+                    f"CI/CD scan failed: {result.error_message or 'Unknown error'}",
+                    "error"
+                )
+
+            await plugin_manager.cleanup()
+
+        except Exception as e:
+            console.print(f"[yellow]Warning: Failed to send notifications: {e}[/yellow]")
+
+        # Exit with appropriate code for CI/CD
+        sys.exit(result.exit_code)
+
+    except Exception as e:
+        console.print(f"[red]CI/CD scan failed: {e}[/red]")
+        sys.exit(2)
 
 
 if __name__ == '__main__':

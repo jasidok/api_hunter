@@ -21,6 +21,7 @@ from .parameter_discoverer import ParameterDiscoverer
 from .response_analyzer import ResponseAnalyzer
 from .wordlist_manager import WordlistManager
 from .mutation_engine import MutationEngine
+from .binary_payload_generator import BinaryPayloadGenerator, EnhancedPayloadGenerator
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +74,7 @@ class FuzzerEngine:
         self.config = config
         self.http_client = http_client
         self.payload_generator = PayloadGenerator(config)
+        self.binary_payload_generator = EnhancedPayloadGenerator(config)
         self.parameter_discoverer = ParameterDiscoverer(http_client)
         self.response_analyzer = ResponseAnalyzer()
         self.wordlist_manager = WordlistManager(config)

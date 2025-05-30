@@ -4,24 +4,17 @@ Configuration management for API Hunter using Pydantic settings.
 
 import os
 from typing import List, Optional
-from pydantic import BaseSettings, Field, validator
+from pydantic import BaseModel, Field, field_validator, ConfigDict
 from pathlib import Path
 
-
-class DatabaseConfig(BaseSettings):
-    """Database configuration settings."""
-
-    url: str = Field(
-        default="postgresql://localhost:5432/api_hunter",
-        env="DATABASE_URL",
-        description="Database connection URL"
-    )
-    pool_size: int = Field(default=10, env="DB_POOL_SIZE")
-    max_overflow: int = Field(default=20, env="DB_MAX_OVERFLOW")
-    echo: bool = Field(default=False, env="DB_ECHO")
+try:
+    from pydantic_settings import BaseSettings
+except ImportError:
+    # Fallback for older pydantic versions
+    from pydantic import BaseSettings
 
 
-class RedisConfig(BaseSettings):
+class RedisConfig(BaseModel):
     """Redis configuration settings."""
 
     url: str = Field(
@@ -33,7 +26,7 @@ class RedisConfig(BaseSettings):
     ssl_cert_reqs: Optional[str] = Field(default=None, env="REDIS_SSL_CERT_REQS")
 
 
-class ScanningConfig(BaseSettings):
+class ScanningConfig(BaseModel):
     """Scanning configuration settings."""
 
     max_concurrent_requests: int = Field(default=50, env="MAX_CONCURRENT_REQUESTS")
@@ -46,7 +39,7 @@ class ScanningConfig(BaseSettings):
     )
 
 
-class AIConfig(BaseSettings):
+class AIConfig(BaseModel):
     """AI and ML configuration settings."""
 
     openai_api_key: Optional[str] = Field(default=None, env="OPENAI_API_KEY")
@@ -55,7 +48,7 @@ class AIConfig(BaseSettings):
     enable_ai_analysis: bool = Field(default=True, env="ENABLE_AI_ANALYSIS")
 
 
-class PluginsConfig(BaseSettings):
+class PluginsConfig(BaseModel):
     """Plugin system configuration."""
 
     enabled: List[str] = Field(
@@ -66,7 +59,7 @@ class PluginsConfig(BaseSettings):
     custom_plugin_path: Optional[str] = Field(default=None, env="CUSTOM_PLUGIN_PATH")
 
 
-class ReportingConfig(BaseSettings):
+class ReportingConfig(BaseModel):
     """Reporting system configuration."""
 
     output_directory: str = Field(default="./reports", env="REPORT_OUTPUT_DIR")
@@ -75,7 +68,7 @@ class ReportingConfig(BaseSettings):
     template_dir: Optional[str] = Field(default=None, env="TEMPLATE_DIR")
 
 
-class SecurityConfig(BaseSettings):
+class SecurityConfig(BaseModel):
     """Security configuration settings."""
 
     verify_ssl: bool = Field(default=False, env="VERIFY_SSL")
@@ -94,25 +87,26 @@ class Config(BaseSettings):
     log_level: str = Field(default="INFO", env="LOG_LEVEL")
 
     # Component configurations
-    database: DatabaseConfig = DatabaseConfig()
-    redis: RedisConfig = RedisConfig()
-    scanning: ScanningConfig = ScanningConfig()
-    ai: AIConfig = AIConfig()
-    plugins: PluginsConfig = PluginsConfig()
-    reporting: ReportingConfig = ReportingConfig()
-    security: SecurityConfig = SecurityConfig()
+    # database: DatabaseConfig = Field(default_factory=DatabaseConfig)  # Removed since it's not currently used
+    redis: RedisConfig = Field(default_factory=RedisConfig)
+    scanning: ScanningConfig = Field(default_factory=ScanningConfig)
+    ai: AIConfig = Field(default_factory=AIConfig)
+    plugins: PluginsConfig = Field(default_factory=PluginsConfig)
+    reporting: ReportingConfig = Field(default_factory=ReportingConfig)
+    security: SecurityConfig = Field(default_factory=SecurityConfig)
 
     # Working directories
     base_dir: Path = Field(default_factory=lambda: Path(__file__).parent.parent.parent)
-    config_dir: Path = Field(default_factory=lambda: Path(__file__).parent.parent / "config")
     logs_dir: Path = Field(default_factory=lambda: Path("./logs"))
 
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
+    model_config = ConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
         case_sensitive = False
+    )
 
-    @validator("log_level")
+    @field_validator("log_level")
+    @classmethod
     def validate_log_level(cls, v):
         """Validate log level."""
         valid_levels = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
@@ -120,17 +114,14 @@ class Config(BaseSettings):
             raise ValueError(f"Log level must be one of: {valid_levels}")
         return v.upper()
 
-    @validator("logs_dir", "config_dir", pre=True, always=True)
+    @field_validator("logs_dir", mode='before')
+    @classmethod
     def ensure_directories_exist(cls, v):
         """Ensure directories exist."""
         if isinstance(v, str):
             v = Path(v)
         v.mkdir(parents=True, exist_ok=True)
         return v
-
-    def get_database_url(self) -> str:
-        """Get the database URL."""
-        return self.database.url
 
     def get_redis_url(self) -> str:
         """Get the Redis URL."""
