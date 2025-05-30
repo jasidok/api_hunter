@@ -7,14 +7,17 @@ Main CLI entry point for the application.
 
 import sys
 import asyncio
+import json
 from pathlib import Path
 from typing import List, Optional
+from datetime import datetime
 
 import click
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 from rich.progress import Progress, SpinnerColumn, TextColumn
+from rich import print as rprint
 
 from api_hunter import __version__
 from api_hunter.core.config import get_config, Config
@@ -75,6 +78,525 @@ def display_banner():
 [yellow]⚠️  Use responsibly and only on systems you own or have permission to test[/yellow]
 """
     console.print(Panel(banner, title="Welcome", border_style="blue"))
+
+
+@cli.command()
+@click.argument('url')
+@click.option('--output', '-o', help='Output file path')
+@click.option('--format', 'report_format',
+              type=click.Choice(['html', 'pdf', 'json', 'markdown']),
+              default='html', help='Report format')
+@click.option('--type', 'report_type',
+              type=click.Choice(['executive', 'technical', 'compliance', 'vulnerability', 'remediation']),
+              default='technical', help='Report type')
+@click.option('--include-ai-analysis', is_flag=True, help='Include AI-powered analysis')
+@click.option('--max-requests', default=100, help='Maximum requests for scanning')
+async def scan_and_report(url, output, report_format, report_type, include_ai_analysis, max_requests):
+    """Perform comprehensive scan and generate professional report."""
+    console.print(f"[bold blue]Starting comprehensive scan of {url}[/bold blue]")
+
+    # Load configuration
+    config = get_config()
+    configure_logging(config.log_level if hasattr(config, 'log_level') else 'INFO')
+
+    # Initialize components
+    from api_hunter.core.http_client import HTTPClient
+    from api_hunter.core.ai_analyzer import AIResponseAnalyzer, VulnerabilityChainer, AnalysisType
+    from api_hunter.discovery.openapi_discoverer import OpenAPIDiscoverer
+    from api_hunter.discovery.rest_discoverer import RESTDiscoverer
+    from api_hunter.discovery.technology_fingerprinter import TechnologyFingerprinter
+    from api_hunter.vulnerabilities.bola_detector import BOLADetector
+    from api_hunter.vulnerabilities.bfla_detector import BFLADetector
+    from api_hunter.vulnerabilities.mass_assignment import MassAssignmentDetector
+    from api_hunter.vulnerabilities.injection_tester import InjectionTester
+    from api_hunter.vulnerabilities.ssrf_detector import SSRFDetector
+    from api_hunter.vulnerabilities.business_logic import BusinessLogicDetector
+    from api_hunter.fuzzing.fuzzer_engine import FuzzerEngine, FuzzingStrategy
+    from api_hunter.reporting.report_generator import ReportGenerator, ReportType, ReportFormat
+
+    http_client = HTTPClient(config)
+
+    scan_results = {
+        'target_url': url,
+        'start_time': datetime.now(),
+        'findings': [],
+        'total_requests': 0,
+        'duration': 0.0
+    }
+
+    try:
+        with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                console=console
+        ) as progress:
+
+            # Discovery phase
+            discovery_task = progress.add_task("Discovering API structure...", total=None)
+
+            openapi_discoverer = OpenAPIDiscoverer(http_client)
+            rest_discoverer = RESTDiscoverer(http_client)
+            tech_fingerprinter = TechnologyFingerprinter(http_client)
+
+            # Discover API structure
+            openapi_info = await openapi_discoverer.discover_openapi_spec(url)
+            endpoints = await rest_discoverer.discover_endpoints(url)
+            tech_info = await tech_fingerprinter.fingerprint_technology(url)
+
+            progress.update(discovery_task, description="✓ Discovery completed")
+
+            # Vulnerability scanning phase
+            vuln_task = progress.add_task("Scanning for vulnerabilities...", total=None)
+
+            # Initialize vulnerability detectors
+            bola_detector = BOLADetector(http_client)
+            bfla_detector = BFLADetector(http_client)
+            mass_assignment_detector = MassAssignmentDetector(http_client)
+            injection_tester = InjectionTester(http_client)
+            ssrf_detector = SSRFDetector(http_client)
+            business_logic_detector = BusinessLogicDetector(http_client)
+
+            # Run vulnerability scans
+            findings = []
+
+            # Test each discovered endpoint
+            for endpoint in endpoints:
+                endpoint_url = endpoint.get('url', url)
+
+                # Run vulnerability tests
+                bola_results = await bola_detector.detect_bola_vulnerabilities(endpoint_url)
+                findings.extend(bola_results)
+
+                bfla_results = await bfla_detector.detect_bfla_vulnerabilities(endpoint_url)
+                findings.extend(bfla_results)
+
+                mass_assignment_results = await mass_assignment_detector.detect_mass_assignment(endpoint_url)
+                findings.extend(mass_assignment_results)
+
+                injection_results = await injection_tester.test_sql_injection(endpoint_url)
+                findings.extend(injection_results)
+
+                ssrf_results = await ssrf_detector.detect_ssrf_vulnerabilities(endpoint_url)
+                findings.extend(ssrf_results)
+
+                business_logic_results = await business_logic_detector.detect_business_logic_flaws(endpoint_url)
+                findings.extend(business_logic_results)
+
+            scan_results['findings'] = findings
+            scan_results['total_requests'] = len(endpoints) * 6  # Rough estimate
+
+            progress.update(vuln_task, description="✓ Vulnerability scanning completed")
+
+            # AI Analysis phase (if enabled)
+            if include_ai_analysis:
+                ai_task = progress.add_task("Running AI analysis...", total=None)
+
+                ai_analyzer = AIResponseAnalyzer(config)
+                vulnerability_chainer = VulnerabilityChainer(ai_analyzer)
+
+                # Analyze responses with AI
+                ai_findings = []
+                for finding in findings:
+                    if 'response_data' in finding:
+                        ai_results = await ai_analyzer.analyze_response(
+                            finding['response_data'],
+                            [AnalysisType.VULNERABILITY_DETECTION, AnalysisType.SENSITIVE_DATA_DETECTION]
+                        )
+                        ai_findings.extend(ai_results)
+
+                # Build vulnerability chains
+                exploitation_chains = await vulnerability_chainer.build_exploitation_chains(findings)
+
+                # Add AI findings to results
+                for ai_result in ai_findings:
+                    for finding in ai_result.findings:
+                        findings.append({
+                            'id': f"ai_{len(findings)}",
+                            'title': f"AI Detected: {finding.get('type', 'Unknown')}",
+                            'description': finding.get('description',
+                                                       'AI-powered analysis detected potential vulnerability'),
+                            'severity': 'MEDIUM',
+                            'risk_level': 'MEDIUM',
+                            'cvss_score': None,
+                            'cwe_id': None,
+                            'owasp_category': 'AI Analysis',
+                            'affected_endpoint': url,
+                            'request_data': {},
+                            'response_data': {},
+                            'evidence': [finding],
+                            'remediation': ', '.join(ai_result.recommendations),
+                            'references': [],
+                            'discovered_at': datetime.now()
+                        })
+
+                # Add exploitation chains
+                for chain in exploitation_chains:
+                    findings.append({
+                        'id': f"chain_{len(findings)}",
+                        'title': f"Vulnerability Chain: {chain.get('type', 'Unknown')}",
+                        'description': chain.get('description',
+                                                 'Multiple vulnerabilities can be chained for greater impact'),
+                        'severity': chain.get('impact', 'HIGH'),
+                        'risk_level': chain.get('impact', 'HIGH'),
+                        'cvss_score': None,
+                        'cwe_id': None,
+                        'owasp_category': 'Vulnerability Chaining',
+                        'affected_endpoint': url,
+                        'request_data': {},
+                        'response_data': {},
+                        'evidence': chain.get('steps', []),
+                        'remediation': 'Address individual vulnerabilities in the chain',
+                        'references': [],
+                        'discovered_at': datetime.now()
+                    })
+
+                scan_results['findings'] = findings
+                progress.update(ai_task, description="✓ AI analysis completed")
+
+            # Fuzzing phase
+            fuzzing_task = progress.add_task("Advanced fuzzing...", total=None)
+
+            fuzzer = FuzzerEngine(config, http_client)
+            fuzzing_session = await fuzzer.start_fuzzing_session(
+                url,
+                strategy=FuzzingStrategy.INTELLIGENT,
+                max_requests=min(max_requests, 100),
+                request_delay=0.1
+            )
+
+            # Wait a bit for fuzzing to run
+            await asyncio.sleep(5)
+
+            # Get fuzzing status
+            fuzzing_status = fuzzer.get_session_status(fuzzing_session)
+
+            # Stop fuzzing session
+            fuzzer.stop_session(fuzzing_session)
+
+            progress.update(fuzzing_task,
+                            description=f"✓ Fuzzing completed ({fuzzing_status.get('vulnerabilities_found', 0)} potential issues)")
+
+            # Report generation phase
+            report_task = progress.add_task("Generating report...", total=None)
+
+            # Calculate scan duration
+            scan_results['duration'] = (datetime.now() - scan_results['start_time']).total_seconds()
+
+            # Convert findings to proper format for reporting
+            from api_hunter.reporting.report_generator import VulnerabilityFinding
+
+            vulnerability_findings = []
+            for i, finding in enumerate(findings):
+                vuln_finding = VulnerabilityFinding(
+                    id=finding.get('id', f'finding_{i}'),
+                    title=finding.get('title', 'Unknown Vulnerability'),
+                    description=finding.get('description', 'No description available'),
+                    severity=finding.get('severity', 'LOW'),
+                    risk_level=finding.get('risk_level', 'LOW'),
+                    cvss_score=finding.get('cvss_score'),
+                    cwe_id=finding.get('cwe_id'),
+                    owasp_category=finding.get('owasp_category', 'Unknown'),
+                    affected_endpoint=finding.get('affected_endpoint', url),
+                    request_data=finding.get('request_data', {}),
+                    response_data=finding.get('response_data', {}),
+                    evidence=finding.get('evidence', []),
+                    remediation=finding.get('remediation', 'No remediation provided'),
+                    references=finding.get('references', []),
+                    discovered_at=finding.get('discovered_at', datetime.now())
+                )
+                vulnerability_findings.append(vuln_finding)
+
+            # Generate report
+            report_generator = ReportGenerator(config)
+
+            # Map report types
+            report_type_map = {
+                'executive': ReportType.EXECUTIVE_SUMMARY,
+                'technical': ReportType.TECHNICAL_DETAILED,
+                'compliance': ReportType.COMPLIANCE_REPORT,
+                'vulnerability': ReportType.VULNERABILITY_REPORT,
+                'remediation': ReportType.REMEDIATION_GUIDE
+            }
+
+            report_format_map = {
+                'html': ReportFormat.HTML,
+                'pdf': ReportFormat.PDF,
+                'json': ReportFormat.JSON,
+                'markdown': ReportFormat.MARKDOWN
+            }
+
+            report_file = await report_generator.generate_report(
+                vulnerability_findings,
+                scan_results,
+                report_type_map.get(report_type, ReportType.TECHNICAL_DETAILED),
+                report_format_map.get(report_format, ReportFormat.HTML),
+                output
+            )
+
+            progress.update(report_task, description="✓ Report generated")
+
+        # Display results summary
+        console.print("\n" + "=" * 60)
+        console.print(f"[bold green]Scan completed successfully![/bold green]")
+        console.print(f"[blue]Target:[/blue] {url}")
+        console.print(f"[blue]Duration:[/blue] {scan_results['duration']:.2f} seconds")
+        console.print(f"[blue]Total Requests:[/blue] {scan_results['total_requests']}")
+        console.print(f"[blue]Vulnerabilities Found:[/blue] {len(findings)}")
+        console.print(f"[blue]Report Generated:[/blue] {report_file}")
+
+        # Show severity breakdown
+        severity_counts = {}
+        for finding in findings:
+            severity = finding.get('severity', 'LOW')
+            severity_counts[severity] = severity_counts.get(severity, 0) + 1
+
+        if severity_counts:
+            console.print("\n[bold]Severity Breakdown:[/bold]")
+            table = Table()
+            table.add_column("Severity", style="bold")
+            table.add_column("Count", justify="right")
+
+            for severity in ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW', 'INFO']:
+                if severity in severity_counts:
+                    color = {
+                        'CRITICAL': 'red',
+                        'HIGH': 'orange3',
+                        'MEDIUM': 'yellow',
+                        'LOW': 'green',
+                        'INFO': 'blue'
+                    }.get(severity, 'white')
+                    table.add_row(f"[{color}]{severity}[/{color}]", str(severity_counts[severity]))
+
+            console.print(table)
+
+        console.print("=" * 60)
+
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Scan interrupted by user[/yellow]")
+    except Exception as e:
+        console.print(f"\n[red]Error during scan: {e}[/red]")
+        raise
+    finally:
+        await http_client.close()
+
+
+@cli.command()
+@click.argument('url')
+@click.option('--strategy', type=click.Choice(['intelligent', 'breadth_first', 'depth_first', 'random', 'hybrid']),
+              default='intelligent', help='Fuzzing strategy')
+@click.option('--max-requests', default=1000, help='Maximum number of requests')
+@click.option('--delay', default=0.1, help='Delay between requests in seconds')
+@click.option('--timeout', default=30, help='Request timeout in seconds')
+@click.option('--auth-header', help='Authentication header (format: "Header: Value")')
+async def fuzz(url, strategy, max_requests, delay, timeout, auth_header):
+    """Advanced intelligent fuzzing of API endpoints."""
+    console.print(f"[bold blue]Starting advanced fuzzing of {url}[/bold blue]")
+
+    config = get_config()
+    configure_logging(config.log_level if hasattr(config, 'log_level') else 'INFO')
+
+    from api_hunter.core.http_client import HTTPClient
+    from api_hunter.fuzzing.fuzzer_engine import FuzzerEngine, FuzzingStrategy
+
+    http_client = HTTPClient(config)
+    fuzzer = FuzzerEngine(config, http_client)
+
+    # Parse authentication header
+    custom_headers = {}
+    if auth_header:
+        if ':' in auth_header:
+            key, value = auth_header.split(':', 1)
+            custom_headers[key.strip()] = value.strip()
+
+    # Map strategy
+    strategy_map = {
+        'intelligent': FuzzingStrategy.INTELLIGENT,
+        'breadth_first': FuzzingStrategy.BREADTH_FIRST,
+        'depth_first': FuzzingStrategy.DEPTH_FIRST,
+        'random': FuzzingStrategy.RANDOM,
+        'hybrid': FuzzingStrategy.HYBRID
+    }
+
+    try:
+        session_id = await fuzzer.start_fuzzing_session(
+            url,
+            strategy=strategy_map.get(strategy, FuzzingStrategy.INTELLIGENT),
+            max_requests=max_requests,
+            request_delay=delay,
+            timeout=timeout,
+            custom_headers=custom_headers
+        )
+
+        console.print(f"[green]Started fuzzing session: {session_id}[/green]")
+        console.print(f"[blue]Strategy:[/blue] {strategy}")
+        console.print(f"[blue]Max Requests:[/blue] {max_requests}")
+        console.print(f"[blue]Delay:[/blue] {delay}s")
+
+        # Monitor fuzzing progress
+        with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                console=console
+        ) as progress:
+
+            monitor_task = progress.add_task("Fuzzing in progress...", total=max_requests)
+
+            last_requests = 0
+            while True:
+                await asyncio.sleep(2)
+
+                status = fuzzer.get_session_status(session_id)
+                if 'error' in status:
+                    break
+
+                current_requests = status['total_requests']
+                vulnerabilities = status['vulnerabilities_found']
+                unique_responses = status['unique_responses']
+                progress_percent = status['progress']
+
+                progress.update(
+                    monitor_task,
+                    completed=current_requests,
+                    description=f"Fuzzing... {current_requests}/{max_requests} requests | "
+                                f"{vulnerabilities} vulns | {unique_responses} unique responses | "
+                                f"{progress_percent:.1f}% complete"
+                )
+
+                if current_requests >= max_requests or progress_percent >= 100:
+                    break
+
+                last_requests = current_requests
+
+        # Get final status
+        final_status = fuzzer.get_session_status(session_id)
+
+        console.print("\n" + "=" * 60)
+        console.print("[bold green]Fuzzing completed![/bold green]")
+        console.print(f"[blue]Total Requests:[/blue] {final_status.get('total_requests', 0)}")
+        console.print(f"[blue]Vulnerabilities Found:[/blue] {final_status.get('vulnerabilities_found', 0)}")
+        console.print(f"[blue]Unique Responses:[/blue] {final_status.get('unique_responses', 0)}")
+        console.print(f"[blue]Duration:[/blue] {final_status.get('elapsed_time', 0):.2f} seconds")
+        console.print(f"[blue]Requests/Second:[/blue] {final_status.get('requests_per_second', 0):.2f}")
+        console.print("=" * 60)
+
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Fuzzing interrupted by user[/yellow]")
+        fuzzer.stop_session(session_id)
+    except Exception as e:
+        console.print(f"\n[red]Error during fuzzing: {e}[/red]")
+        raise
+    finally:
+        await http_client.close()
+
+
+@cli.command()
+@click.argument('url')
+@click.option('--analysis-types', multiple=True,
+              type=click.Choice(['vulnerability', 'sensitive_data', 'error', 'pattern', 'business_logic']),
+              default=['vulnerability', 'sensitive_data'],
+              help='Types of AI analysis to perform')
+@click.option('--output', '-o', help='Output JSON file for results')
+async def ai_analyze(url, analysis_types, output):
+    """AI-powered analysis of API responses."""
+    console.print(f"[bold blue]Starting AI analysis of {url}[/bold blue]")
+
+    config = get_config()
+    configure_logging(config.log_level if hasattr(config, 'log_level') else 'INFO')
+
+    from api_hunter.core.http_client import HTTPClient
+    from api_hunter.core.ai_analyzer import AIResponseAnalyzer, AnalysisType
+
+    http_client = HTTPClient(config)
+    ai_analyzer = AIResponseAnalyzer(config)
+
+    # Map analysis types
+    analysis_type_map = {
+        'vulnerability': AnalysisType.VULNERABILITY_DETECTION,
+        'sensitive_data': AnalysisType.SENSITIVE_DATA_DETECTION,
+        'error': AnalysisType.ERROR_ANALYSIS,
+        'pattern': AnalysisType.PATTERN_RECOGNITION,
+        'business_logic': AnalysisType.BUSINESS_LOGIC_ANALYSIS
+    }
+
+    selected_types = [analysis_type_map[t] for t in analysis_types]
+
+    try:
+        with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                console=console
+        ) as progress:
+
+            task = progress.add_task("Fetching response...", total=None)
+
+            # Get response from URL
+            response = await http_client.request('GET', url)
+
+            progress.update(task, description="Analyzing with AI...")
+
+            # Perform AI analysis
+            response_data = {
+                'status_code': response.get('status_code'),
+                'headers': response.get('headers', {}),
+                'body': response.get('body', '')
+            }
+
+            ai_results = await ai_analyzer.analyze_response(response_data, selected_types)
+
+            progress.update(task, description="✓ Analysis completed")
+
+        # Display results
+        console.print("\n" + "=" * 60)
+        console.print("[bold green]AI Analysis Results[/bold green]")
+
+        total_findings = 0
+        for result in ai_results:
+            console.print(f"\n[bold]{result.analysis_type.value.replace('_', ' ').title()}[/bold]")
+            console.print(f"[blue]Confidence:[/blue] {result.confidence:.2f}")
+            console.print(f"[blue]Processing Time:[/blue] {result.processing_time:.3f}s")
+            console.print(f"[blue]Findings:[/blue] {len(result.findings)}")
+
+            total_findings += len(result.findings)
+
+            if result.findings:
+                for i, finding in enumerate(result.findings[:3], 1):  # Show first 3 findings
+                    console.print(
+                        f"  {i}. {finding.get('type', 'Unknown')}: {finding.get('description', 'No description')[:100]}...")
+
+                if len(result.findings) > 3:
+                    console.print(f"  ... and {len(result.findings) - 3} more findings")
+
+            if result.recommendations:
+                console.print(f"[yellow]Recommendations:[/yellow]")
+                for rec in result.recommendations[:3]:  # Show first 3 recommendations
+                    console.print(f"  • {rec}")
+
+        console.print(f"\n[bold]Total Findings Across All Analysis Types:[/bold] {total_findings}")
+        console.print("=" * 60)
+
+        # Save results to JSON if requested
+        if output:
+            results_data = []
+            for result in ai_results:
+                results_data.append({
+                    'analysis_type': result.analysis_type.value,
+                    'confidence': result.confidence,
+                    'findings': result.findings,
+                    'recommendations': result.recommendations,
+                    'metadata': result.metadata,
+                    'processing_time': result.processing_time
+                })
+
+            with open(output, 'w') as f:
+                json.dump(results_data, f, indent=2, default=str)
+
+            console.print(f"[green]Results saved to {output}[/green]")
+
+    except Exception as e:
+        console.print(f"\n[red]Error during AI analysis: {e}[/red]")
+        raise
+    finally:
+        await http_client.close()
 
 
 @cli.command()
@@ -282,7 +804,7 @@ def plugins(list_plugins, enable, disable):
             ("burp_integration", "enabled", "Burp Suite integration"),
             ("slack_notifications", "enabled", "Slack webhook notifications"),
             ("custom_wordlists", "disabled", "Custom wordlist management"),
-            ("ai_analysis", "disabled", "AI-powered response analysis"),
+            ("ai_analysis", "disabled", "AI-powered analysis"),
         ]
 
         table = Table()

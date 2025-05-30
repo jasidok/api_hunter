@@ -342,3 +342,89 @@ def create_http_client(
         return AsyncHTTPClient(request_config, rate_limit_config, retry_config)
     else:
         return SyncHTTPClient(request_config, retry_config)
+
+
+class HTTPClient:
+    """
+    Unified HTTP client that automatically adapts to sync/async context.
+    
+    This is a compatibility wrapper that provides a unified interface
+    and automatically uses the appropriate underlying client.
+    """
+
+    def __init__(self, config=None):
+        self.config = config
+        self.request_config = RequestConfig()
+        self.rate_limit_config = RateLimitConfig()
+        self.retry_config = RetryConfig()
+
+        # Create async client
+        self._async_client = AsyncHTTPClient(
+            self.request_config,
+            self.rate_limit_config,
+            self.retry_config
+        )
+
+        # Create sync client
+        self._sync_client = SyncHTTPClient(
+            self.request_config,
+            self.retry_config
+        )
+
+    async def request(self, method: str, url: str, **kwargs) -> Dict[str, Any]:
+        """Make an HTTP request (async version)."""
+        async with self._async_client as client:
+            response = await client.request(method, url, **kwargs)
+            return {
+                'status_code': response.status_code,
+                'headers': dict(response.headers),
+                'body': response.text,
+                'content': response.content,
+                'url': str(response.url),
+                'response_time': getattr(response, 'elapsed', 0)
+            }
+
+    def request_sync(self, method: str, url: str, **kwargs) -> Dict[str, Any]:
+        """Make an HTTP request (sync version)."""
+        response = self._sync_client.request(method, url, **kwargs)
+        return {
+            'status_code': response.status_code,
+            'headers': dict(response.headers),
+            'body': response.text,
+            'content': response.content,
+            'url': response.url,
+            'response_time': response.elapsed.total_seconds() if response.elapsed else 0
+        }
+
+    async def get(self, url: str, **kwargs) -> Dict[str, Any]:
+        """Make a GET request."""
+        return await self.request('GET', url, **kwargs)
+
+    async def post(self, url: str, **kwargs) -> Dict[str, Any]:
+        """Make a POST request."""
+        return await self.request('POST', url, **kwargs)
+
+    async def put(self, url: str, **kwargs) -> Dict[str, Any]:
+        """Make a PUT request."""
+        return await self.request('PUT', url, **kwargs)
+
+    async def patch(self, url: str, **kwargs) -> Dict[str, Any]:
+        """Make a PATCH request."""
+        return await self.request('PATCH', url, **kwargs)
+
+    async def delete(self, url: str, **kwargs) -> Dict[str, Any]:
+        """Make a DELETE request."""
+        return await self.request('DELETE', url, **kwargs)
+
+    async def head(self, url: str, **kwargs) -> Dict[str, Any]:
+        """Make a HEAD request."""
+        return await self.request('HEAD', url, **kwargs)
+
+    async def options(self, url: str, **kwargs) -> Dict[str, Any]:
+        """Make an OPTIONS request."""
+        return await self.request('OPTIONS', url, **kwargs)
+
+    async def close(self):
+        """Close the client."""
+        # AsyncHTTPClient uses context manager, so nothing to do here
+        self._sync_client.close()
